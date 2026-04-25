@@ -1,35 +1,173 @@
 name: Release
 
-# Triggered by pushing a `v*` tag (e.g. `v1.0.0`). Builds a single-file
-# PyInstaller binary on each OS, then attaches all three to a GitHub
-# Release for that tag.
+# Triggered by pushing a `v*` tag (e.g. `v1.0.0`). Builds a PyInstaller binary
+# on each OS, packages it appropriately for the platform, and attaches the
+# results to a GitHub Release.
+#
+# Why archives instead of bare binaries: browsers strip the executable bit
+# from raw downloads, and macOS Finder opens a no-extension Mach-O as text
+# in TextEdit. Shipping inside .zip / .tar.gz preserves permissions and the
+# .app bundle structure so the user's double-click does the right thing.
 on:
   push:
     tags:
       - 'v*'
-  # Manual run for testing (no release published — just artifacts).
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      # Don't kill the other platforms if one fails; we still want partial
-      # artifacts to debug from.
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            asset: snakeclaw-linux-x86_64
-            binary: snakeclaw
-          - os: macos-latest
-            asset: snakeclaw-macos-arm64
-            binary: snakeclaw
-          - os: windows-latest
-            asset: snakeclaw-windows-x86_64.exe
-            binary: snakeclaw.exe
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package + build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest -q
+
+      - name: Build single-file binary
+        run: |
+          pyinstaller --onefile --name snakeclaw \
+            --collect-submodules snakeclaw \
+            main.py
+
+      - name: Package as tar.gz
+        run: |
+          chmod +x dist/snakeclaw
+          mkdir -p staging/snakeclaw
+          cp dist/snakeclaw staging/snakeclaw/snakeclaw
+          cp README.md staging/snakeclaw/README.md
+          cat > staging/snakeclaw/RUN.txt <<'EOF'
+          To play SnakeClaw on Linux:
+
+              ./snakeclaw
+
+          (from a terminal, in this directory)
+
+          If you get a permissions error:
+
+              chmod +x snakeclaw
+              ./snakeclaw
+          EOF
+          tar -C staging -czf snakeclaw-linux-x86_64.tar.gz snakeclaw
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snakeclaw-linux-x86_64
+          path: snakeclaw-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package + build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest -q
+
+      - name: Build single-file binary
+        run: |
+          pyinstaller --onefile --name snakeclaw \
+            --collect-submodules snakeclaw \
+            main.py
+
+      - name: Assemble SnakeClaw.app bundle
+        run: |
+          set -euo pipefail
+          APP="SnakeClaw.app"
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          # The actual game binary (curses TUI — needs a real terminal).
+          cp dist/snakeclaw "$APP/Contents/MacOS/snakeclaw-bin"
+          chmod +x "$APP/Contents/MacOS/snakeclaw-bin"
+
+          # CFBundleExecutable launcher: opens the game in Terminal.app.
+          # We write a temp .command file and `open` it — Terminal handles
+          # .command files natively as shell scripts, so this avoids the
+          # AppleScript automation prompt that `osascript` would trigger.
+          cat > "$APP/Contents/MacOS/SnakeClaw" <<'LAUNCHER'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          BIN="$DIR/snakeclaw-bin"
+
+          # Drop quarantine on the inner binary so Gatekeeper doesn't block
+          # it on first run after the user has approved the .app itself.
+          xattr -dr com.apple.quarantine "$BIN" 2>/dev/null || true
+          chmod +x "$BIN" 2>/dev/null || true
+
+          LAUNCH_DIR="$(mktemp -d -t snakeclaw)"
+          LAUNCH="$LAUNCH_DIR/SnakeClaw.command"
+          cat > "$LAUNCH" <<EOF
+          #!/bin/bash
+          clear
+          "$BIN"
+          echo
+          echo "[SnakeClaw exited — close this window when ready]"
+          EOF
+          chmod +x "$LAUNCH"
+          open "$LAUNCH"
+          LAUNCHER
+          chmod +x "$APP/Contents/MacOS/SnakeClaw"
+
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key><string>SnakeClaw</string>
+              <key>CFBundleDisplayName</key><string>SnakeClaw</string>
+              <key>CFBundleIdentifier</key><string>com.openclaw.snakeclaw</string>
+              <key>CFBundleVersion</key><string>1.0.0</string>
+              <key>CFBundleShortVersionString</key><string>1.0.0</string>
+              <key>CFBundleExecutable</key><string>SnakeClaw</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+              <key>LSMinimumSystemVersion</key><string>11.0</string>
+              <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Zip the .app (ditto preserves macOS metadata + exec bits)
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent SnakeClaw.app snakeclaw-macos-arm64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snakeclaw-macos-arm64
+          path: snakeclaw-macos-arm64.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -45,11 +183,9 @@ jobs:
           pip install -e ".[build]"
 
       - name: Install Windows curses
-        if: runner.os == 'Windows'
         run: pip install windows-curses
 
       - name: Run tests
-        # Quick sanity gate so we don't ship a broken binary.
         shell: bash
         run: |
           pip install pytest
@@ -62,23 +198,21 @@ jobs:
             --collect-submodules snakeclaw \
             main.py
 
-      - name: Rename artifact
+      - name: Rename to release asset name
         shell: bash
-        run: |
-          mv "dist/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+        run: mv dist/snakeclaw.exe snakeclaw-windows-x86_64.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: snakeclaw-windows-x86_64
+          path: snakeclaw-windows-x86_64.exe
           if-no-files-found: error
 
   release:
     name: Publish Release
-    needs: build
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
-    # Only publish when a tag was pushed — manual runs just produce artifacts.
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -95,3 +229,13 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          body: |
+            ## Downloads
+
+            - **macOS (Apple Silicon)** — `snakeclaw-macos-arm64.zip`
+              Unzip, then double-click `SnakeClaw.app`. First launch: right-click → Open
+              to bypass Gatekeeper (the build is unsigned).
+            - **Linux (x86_64)** — `snakeclaw-linux-x86_64.tar.gz`
+              Extract, then run `./snakeclaw` from a terminal.
+            - **Windows (x86_64)** — `snakeclaw-windows-x86_64.exe`
+              Double-click to launch (a console window opens automatically).
