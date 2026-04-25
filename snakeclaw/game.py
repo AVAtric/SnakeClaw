@@ -6,7 +6,7 @@ import time
 
 from .constants import BONUS_FOOD_CHAR, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from .engine import GameEngine
-from .model import GameState
+from .model import GameState, WallMode
 from .ui import CursesUI
 
 
@@ -23,10 +23,11 @@ _BLOCKING_STATES = frozenset({
 class SnakeGame:
     """Main game controller."""
 
-    def __init__(self, width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT):
+    def __init__(self, width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT,
+                 wall_mode: WallMode = WallMode.WRAP):
         self.width = width
         self.height = height
-        self.engine = GameEngine(width, height)
+        self.engine = GameEngine(width, height, wall_mode=wall_mode)
         self.ui = CursesUI(width, height)
 
     def run(self) -> None:

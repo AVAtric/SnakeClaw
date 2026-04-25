@@ -4,7 +4,7 @@ import json
 import os
 
 from snakeclaw.engine import GameEngine, HighScoreManager, HighScoreEntry, SPEED_LEVELS, POINTS_PER_LEVEL
-from snakeclaw.model import Action, Direction, GameState
+from snakeclaw.model import Action, Direction, GameState, WallMode
 
 
 # ── HighScoreManager ──────────────────────────────────────────────────────
@@ -124,21 +124,37 @@ class TestEngineMenu:
 
     def test_menu_high_scores(self):
         e = GameEngine()
-        e.menu_index = 1
+        e.menu_index = 2  # Start, Wall, [High Scores], Help, Quit
         e.handle_input(Action.SELECT)
         assert e.state == GameState.HIGH_SCORES
 
     def test_menu_help(self):
         e = GameEngine()
-        e.menu_index = 2
+        e.menu_index = 3
         e.handle_input(Action.SELECT)
         assert e.state == GameState.HELP
 
     def test_menu_quit(self):
         e = GameEngine()
-        e.menu_index = 3
+        e.menu_index = 4
         e.handle_input(Action.SELECT)
         assert e.state == GameState.QUIT
+
+    def test_menu_toggles_wall_mode(self):
+        e = GameEngine()
+        assert e.wall_mode == WallMode.WRAP  # default
+        e.menu_index = 1  # Wall toggle
+        e.handle_input(Action.SELECT)
+        assert e.wall_mode == WallMode.SOLID
+        e.handle_input(Action.SELECT)
+        assert e.wall_mode == WallMode.WRAP
+
+    def test_menu_label_reflects_wall_mode(self):
+        e = GameEngine()
+        assert e.menu_items[1] == "Wall: Wrap"
+        e.menu_index = 1
+        e.handle_input(Action.SELECT)
+        assert e.menu_items[1] == "Wall: Solid"
 
     def test_menu_q_quits(self):
         e = GameEngine()
@@ -146,8 +162,9 @@ class TestEngineMenu:
         assert e.state == GameState.QUIT
 
 
-def _playing(tmp_path):
-    e = GameEngine(highscore_path=str(tmp_path / "hs.json"))
+def _playing(tmp_path, wall_mode=WallMode.WRAP):
+    e = GameEngine(highscore_path=str(tmp_path / "hs.json"),
+                   wall_mode=wall_mode)
     e.new_game()
     return e
 
@@ -209,15 +226,28 @@ class TestEnginePlaying:
         assert len(e.snake.get_body()) == initial_len + 1
 
     def test_wall_collision_game_over(self, tmp_path):
-        e = _playing(tmp_path)
-        # Pin food off the snake's rightward path so it dies hitting the wall
-        # rather than scoring and routing through ENTER_INITIALS.
+        # Solid mode: walls are deadly. Pin food off the snake's rightward
+        # path so it dies hitting the wall rather than scoring.
+        e = _playing(tmp_path, wall_mode=WallMode.SOLID)
         e.food.place(pos=(0, 0))
         for _ in range(100):
             e.tick()
             if e.state == GameState.GAME_OVER:
                 break
         assert e.state == GameState.GAME_OVER
+
+    def test_wrap_mode_passes_through_wall(self, tmp_path):
+        # Default WRAP mode: snake survives wall contact and re-enters opposite.
+        e = _playing(tmp_path, wall_mode=WallMode.WRAP)
+        # Park snake just before the right wall, body trailing left.
+        e.snake.body = [(5, e.width - 1), (5, e.width - 2), (5, e.width - 3)]
+        e.snake.direction = Direction.RIGHT
+        e.snake._last_moved_direction = Direction.RIGHT
+        # Pin food away so eating doesn't change state.
+        e.food.place(pos=(0, 0))
+        e.tick()
+        assert e.state == GameState.PLAYING
+        assert e.snake.get_head() == (5, 0)  # wrapped to opposite side
 
     def test_level_increases(self, tmp_path):
         e = _playing(tmp_path)
@@ -295,7 +325,9 @@ class TestEngineGameOver:
         assert e.state == GameState.QUIT
 
     def test_score_saved_on_game_over(self, tmp_path):
-        e = GameEngine(highscore_path=str(tmp_path / "hs.json"))
+        # Solid mode so the snake reliably dies on the wall within 100 ticks.
+        e = GameEngine(highscore_path=str(tmp_path / "hs.json"),
+                       wall_mode=WallMode.SOLID)
         e.new_game()
         # Feed snake to get score
         head = e.snake.get_head()

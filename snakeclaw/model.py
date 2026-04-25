@@ -40,6 +40,12 @@ class GameState(Enum):
     QUIT = "quit"
 
 
+class WallMode(Enum):
+    """Whether walls wrap (toroidal) or kill on contact."""
+    WRAP = "wrap"
+    SOLID = "solid"
+
+
 OPPOSITE: dict[Direction, Direction] = {
     Direction.UP: Direction.DOWN,
     Direction.DOWN: Direction.UP,
@@ -63,11 +69,13 @@ class Snake:
             self.body.append(current_pos)
         self.grow: bool = False
 
-    def move(self) -> None:
-        """Move the snake one step in its current direction."""
-        head = self.body[0]
-        new_head = (head[0] + self.direction.value[0],
-                    head[1] + self.direction.value[1])
+    def move(self, new_head: Optional[Tuple[int, int]] = None) -> None:
+        """Move the snake one step. Pass `new_head` to override the computed
+        position (e.g. when the engine has applied wall-wrap)."""
+        if new_head is None:
+            head = self.body[0]
+            new_head = (head[0] + self.direction.value[0],
+                        head[1] + self.direction.value[1])
         self.body.insert(0, new_head)
         if self.grow:
             self.grow = False
@@ -105,12 +113,27 @@ class Snake:
         head = self.get_head()
         return self._out_of_bounds(head, width, height) or head in self.body[1:]
 
-    def check_next_move(self, width: int, height: int) -> bool:
-        """Check if the next move would cause a collision."""
-        head = self.get_head()
-        new_head = (head[0] + self.direction.value[0],
-                    head[1] + self.direction.value[1])
-        if self._out_of_bounds(new_head, width, height):
+    def compute_next_head(self, width: int, height: int,
+                          wrap: bool = False) -> Tuple[int, int]:
+        """Where the head will land on the next move, applying wrap if enabled.
+
+        With wrap=False, the result may be out of bounds — callers must check.
+        """
+        head = self.body[0]
+        raw = (head[0] + self.direction.value[0],
+               head[1] + self.direction.value[1])
+        if wrap:
+            return (raw[0] % height, raw[1] % width)
+        return raw
+
+    def check_next_move(self, width: int, height: int,
+                        wrap: bool = False) -> bool:
+        """Check if the next move would cause a collision.
+
+        With wrap=True, walls are toroidal; only self-collision is fatal.
+        """
+        new_head = self.compute_next_head(width, height, wrap=wrap)
+        if not wrap and self._out_of_bounds(new_head, width, height):
             return True
         body_to_check = self.body if self.grow else self.body[:-1]
         return new_head in body_to_check

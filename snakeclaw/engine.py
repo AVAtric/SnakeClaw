@@ -13,9 +13,14 @@ from .constants import (
     BONUS_FOOD_CHANCE, BONUS_FOOD_CHAR, BONUS_FOOD_DURATION,
     BONUS_FOOD_POINTS, DEFAULT_HEIGHT, DEFAULT_WIDTH, FOOD_CHARS,
     INITIAL_SNAKE_LENGTH, INITIALS_LENGTH, MAX_HIGH_SCORE_ENTRIES,
-    MENU_ITEMS, POINTS_PER_LEVEL, SPEED_LEVELS
+    POINTS_PER_LEVEL, SPEED_LEVELS
 )
-from .model import Action, BonusFood, Direction, Food, GameState, Snake
+from .model import Action, BonusFood, Direction, Food, GameState, Snake, WallMode
+
+
+# Menu actions, in display order. Labels are computed dynamically so the
+# wall-mode item can show its current value.
+_MENU_ACTIONS = ("start", "wall", "scores", "help", "quit")
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +119,8 @@ class GameEngine:
     """Core game logic with no terminal dependency."""
 
     def __init__(self, width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT,
-                 highscore_path: Optional[str] = None):
+                 highscore_path: Optional[str] = None,
+                 wall_mode: WallMode = WallMode.WRAP):
         self.width = width
         self.height = height
         self.state: GameState = GameState.MENU
@@ -122,10 +128,10 @@ class GameEngine:
         self.food: Optional[Food] = None
         self.score: int = 0
         self.level: int = 1
+        self.wall_mode: WallMode = wall_mode
         self.high_scores = HighScoreManager(path=highscore_path)
 
         # Menu state
-        self.menu_items = MENU_ITEMS
         self.menu_index: int = 0
 
         # Bonus food
@@ -145,8 +151,30 @@ class GameEngine:
     def high_score(self) -> int:
         return max(self.high_scores.best, self.score)
 
+    @property
+    def menu_items(self) -> List[str]:
+        """Display labels for the menu, in order."""
+        return [self._menu_label(a) for a in _MENU_ACTIONS]
+
+    def _menu_label(self, action: str) -> str:
+        if action == "start":
+            return "Start Game"
+        if action == "wall":
+            return f"Wall: {self.wall_mode.value.title()}"
+        if action == "scores":
+            return "High Scores"
+        if action == "help":
+            return "Help"
+        if action == "quit":
+            return "Quit"
+        return action
+
     def _recompute_level(self) -> None:
         self.level = min(len(SPEED_LEVELS), 1 + self.score // POINTS_PER_LEVEL)
+
+    def _toggle_wall_mode(self) -> None:
+        self.wall_mode = (WallMode.SOLID if self.wall_mode == WallMode.WRAP
+                          else WallMode.WRAP)
 
     # -- init / reset --------------------------------------------------------
 
@@ -202,18 +230,20 @@ class GameEngine:
 
     def _handle_menu_input(self, inp: Union[Direction, Action]) -> None:
         if inp in (Direction.UP, Action.MENU_UP):
-            self.menu_index = (self.menu_index - 1) % len(self.menu_items)
+            self.menu_index = (self.menu_index - 1) % len(_MENU_ACTIONS)
         elif inp in (Direction.DOWN, Action.MENU_DOWN):
-            self.menu_index = (self.menu_index + 1) % len(self.menu_items)
+            self.menu_index = (self.menu_index + 1) % len(_MENU_ACTIONS)
         elif inp in (Action.SELECT, Action.START):
-            selected = self.menu_items[self.menu_index]
-            if selected == "Start Game":
+            action = _MENU_ACTIONS[self.menu_index]
+            if action == "start":
                 self.new_game()
-            elif selected == "High Scores":
+            elif action == "wall":
+                self._toggle_wall_mode()
+            elif action == "scores":
                 self.state = GameState.HIGH_SCORES
-            elif selected == "Help":
+            elif action == "help":
                 self.state = GameState.HELP
-            elif selected == "Quit":
+            elif action == "quit":
                 self.state = GameState.QUIT
 
     def _handle_playing_input(self, inp: Union[Direction, Action]) -> None:
@@ -280,13 +310,13 @@ class GameEngine:
         if self.bonus and self.bonus.is_expired():
             self.bonus.despawn()
 
-        if self.snake.check_next_move(self.width, self.height):
+        wrap = self.wall_mode == WallMode.WRAP
+        if self.snake.check_next_move(self.width, self.height, wrap=wrap):
             self._on_collision()
             return
 
-        head = self.snake.get_head()
-        next_head = (head[0] + self.snake.direction.value[0],
-                     head[1] + self.snake.direction.value[1])
+        next_head = self.snake.compute_next_head(self.width, self.height,
+                                                 wrap=wrap)
 
         ate_normal = self.food.check_eaten(next_head)
         if ate_normal:
@@ -303,7 +333,7 @@ class GameEngine:
         if ate_normal or ate_bonus:
             self._recompute_level()
 
-        self.snake.move()
+        self.snake.move(new_head=next_head)
 
         if ate_normal and self.bonus and not self.bonus.active:
             if random.random() < BONUS_FOOD_CHANCE:

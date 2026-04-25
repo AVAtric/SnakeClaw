@@ -1,7 +1,7 @@
 """Unit tests for Snake game models."""
 
 import pytest
-from snakeclaw.model import Snake, Food, Direction, GameState, OPPOSITE
+from snakeclaw.model import Snake, Food, Direction, GameState, OPPOSITE, WallMode
 
 
 # ── Direction ──────────────────────────────────────────────────────────────
@@ -158,6 +158,33 @@ class TestSnakeCollision:
         s.set_direction(Direction.LEFT); s.move()
         s.set_direction(Direction.UP)
         assert s.check_next_move(20, 20)
+
+
+class TestSnakeWrap:
+    def test_compute_next_head_wraps_right(self):
+        s = Snake((5, 19), direction=Direction.RIGHT)
+        assert s.compute_next_head(20, 20, wrap=True) == (5, 0)
+
+    def test_compute_next_head_wraps_up(self):
+        s = Snake((0, 5), direction=Direction.UP)
+        assert s.compute_next_head(20, 20, wrap=True) == (19, 5)
+
+    def test_compute_next_head_no_wrap(self):
+        s = Snake((5, 19), direction=Direction.RIGHT)
+        assert s.compute_next_head(20, 20, wrap=False) == (5, 20)
+
+    def test_check_next_move_wrap_ignores_walls(self):
+        s = Snake((5, 19), direction=Direction.RIGHT)
+        assert not s.check_next_move(20, 20, wrap=True)
+
+    def test_move_with_explicit_head(self):
+        s = Snake((5, 5), direction=Direction.RIGHT)
+        s.move(new_head=(5, 0))  # caller-supplied wrap position
+        assert s.get_head() == (5, 0)
+
+    def test_wall_mode_enum_values(self):
+        assert WallMode.WRAP.value == "wrap"
+        assert WallMode.SOLID.value == "solid"
 
 
 class TestSnakeHelpers:

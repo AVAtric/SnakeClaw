@@ -77,9 +77,6 @@ GAME_TITLE = [
 "─ T E R M I N A L ─",
 ]
 
-# Menu items
-MENU_ITEMS = ["Start Game", "High Scores", "Help", "Quit"]
-
 # Hints and help text
 MENU_HINT = "↑/↓ navigate  Enter/Space select  Q quit"
 GAME_HINTS = " P=pause  M=menu  R=restart  Q=quit"
@@ -93,7 +90,10 @@ HELP_TEXT = [
     "Q ─ quit",
     "",
     "Eat food to grow and score points.",
-    "Avoid walls and your own tail!",
+    "Avoid your own tail!",
+    "Wall mode (toggle on the menu):",
+    "  Wrap  ─ pass through walls to the other side",
+    "  Solid ─ walls are deadly",
     "Speed increases every 5 points.",
     "Enter your initials for high scores!",
 ]
